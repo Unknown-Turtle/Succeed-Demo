@@ -1,0 +1,340 @@
+{
+  "name": "Succeed",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "YOUR_WEBHOOK_ID",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        -528,
+        -64
+      ],
+      "id": "d0733663-f9b9-433b-8805-ae74ebb47ac1",
+      "name": "Webhook",
+      "webhookId": "YOUR_WEBHOOK_ID"
+    },
+    {
+      "parameters": {
+        "jsCode": "for (const item of $input.all()) {\n  // Grab the text from the Guardrails node\n  let rawText = item.json.guardrailsInput || \"\";\n\n  // Clean off the \"[object Object]\" glitch so we have pure text\n  let cleanText = rawText.replace(\"[object Object]\", \"\").trim();\n\n  // Define our Regex patterns for extraction\n  const emailRegex = /([a-zA-Z0-9._-]+@[a-zA-Z0-9._-]+\\.[a-zA-Z0-9_-]+)/gi;\n  const urlRegex = /(https?:\\/\\/[^\\s]+|[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,})/gi;\n\n  // Execute the extraction on the cleaned text\n  item.json.extracted_emails = cleanText.match(emailRegex) || [];\n  item.json.extracted_urls = cleanText.match(urlRegex) || [];\n\n  // Reconstruct the 'body.message' object so your Gemini prompt \n  // (which looks for {{ $json.body.message }}) still works perfectly.\n  item.json.body = {\n    message: cleanText\n  };\n}\n\nreturn $input.all();"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        32,
+        -96
+      ],
+      "id": "a93da40a-b56a-4d5e-b342-9c63852d0a86",
+      "name": "Regex.js"
+    },
+    {
+      "parameters": {
+        "jsCode": "const rawText = $json.candidates[0].content.parts[0].text;\nconst parsedData = JSON.parse(rawText);\n\nreturn {\n  category: parsedData.category,\n  priority_score: parsedData.priority_score,\n  reasoning: parsedData.reasoning,\n  next_action: parsedData.next_action,\n  draft_reply: parsedData.draft_reply,\n  // Pulling the original message forward for your 'Source of Truth'\n  original_message: $node[\"Webhook\"].json.body.message \n};"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        544,
+        -96
+      ],
+      "id": "95ff27a9-be90-4a89-800f-ec0b2b48d764",
+      "name": "JsonFormatter.js"
+    },
+    {
+      "parameters": {
+        "modelId": {
+          "__rl": true,
+          "value": "models/gemini-2.5-pro",
+          "mode": "list",
+          "cachedResultName": "models/gemini-2.5-pro"
+        },
+        "messages": {
+          "values": [
+            {
+              "content": "=Role: You are an intelligent intake assistant for Succeed. Your job is to process inbound educational and corporate partnership enquiries, score them, and determine the next step.\n\nResilience & Edge Case Guidelines:\n- Handle missing or incomplete data gracefully. If the input is empty or nonsensical, categorise as \"Incomplete\" with a score of 1.\n- Avoid breaking if the input structure is unexpected; process whatever text is available.\n- If no relevant information can be found for a specific logic point, use an empty string \"\" or null value, but ALWAYS return the full JSON structure.\n- CRITICAL: Identify and flag low-quality or spam inputs. If the message pitches unsolicited services, sells followers, or contains suspicious links (e.g., 'link-xyz' or typosquatted domains), classify as \"Spam\" and score it 1.\n\nResponse Message Logic (draft_reply):\n- High-Value: Generate a concise follow-up representing Succeed. Move the opportunity forward by proposing a specific next step, such as a discovery call. \n- Incomplete: Generate a polite message requesting the specific missing information needed to evaluate the enquiry. \n- Spam/Low-Quality: Output exactly \"No draft reply needed\". Do not engage or provide a template. \n- Tone: Use a professional, British English tone throughout. \n\nOutput Format:\nYou must output a strict JSON object with the following keys:\n- category: Exactly one of [High Value, Ambiguous, Incomplete, Spam].\n- priority_score: Integer (1-10). High-value = 8-10; Incomplete/Ambiguous = 4-7; Spam = 1.\n- reasoning: A one-sentence explanation of the score and category.\n- next_action: Short instruction (e.g., 'Schedule Call', 'Request more info', 'Ignore').\n- draft_reply: The generated follow-up message or \"No draft reply needed\". \n\n---\nData to process:\nIncoming Enquiry: {{ $json.body.message }}\nExtracted Emails: {{ $json.extracted_emails }}\nExtracted URLs: {{ $json.extracted_urls }}",
+              "role": "=user"
+            }
+          ]
+        },
+        "simplify": false,
+        "jsonOutput": true,
+        "builtInTools": {
+          "googleSearch": false,
+          "urlContext": false
+        },
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.googleGemini",
+      "typeVersion": 1.1,
+      "position": [
+        208,
+        -96
+      ],
+      "id": "42ea37d9-b8eb-4de2-a6bf-f77df31777c8",
+      "name": "Gemini Email Processs",
+      "retryOnFail": true,
+      "maxTries": 2,
+      "credentials": {
+        "googlePalmApi": {
+          "id": "YOUR_GEMINI_CREDENTIAL_ID",
+          "name": "Google Gemini(PaLM) Api account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "https://docs.google.com/spreadsheets/d/YOUR_GOOGLE_SHEET_ID/edit?gid=0#gid=0",
+          "mode": "url"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "gid=0",
+          "mode": "list",
+          "cachedResultName": "Sheet1",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/YOUR_GOOGLE_SHEET_ID/edit#gid=0"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "Message": "={{ $json.category }}",
+            "URLs": "={{ $('Regex.js').item.json.extracted_urls }}",
+            "Emails": "={{ $('Regex.js').item.json.extracted_emails }}",
+            "Category": "={{ $json.category }}",
+            "Reasoning": "={{ $json.reasoning }}",
+            "Score": "={{ $json.priority_score }}",
+            "Action": "={{ $json.next_action }}",
+            "Draft reply": "={{ $json.draft_reply }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "Message",
+              "displayName": "Message",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Emails",
+              "displayName": "Emails",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "URLs",
+              "displayName": "URLs",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Category",
+              "displayName": "Category",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Score",
+              "displayName": "Score",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Reasoning",
+              "displayName": "Reasoning",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Action",
+              "displayName": "Action",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Draft reply",
+              "displayName": "Draft reply",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        752,
+        -176
+      ],
+      "id": "5823890c-84dd-4424-bef6-e7540495077b",
+      "name": "Append row in SucceedDemo",
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "YOUR_SHEETS_CREDENTIAL_ID",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatGoogleGemini",
+      "typeVersion": 1,
+      "position": [
+        -240,
+        192
+      ],
+      "id": "6a800d60-eb3b-4c0f-a542-2522e3ccec83",
+      "name": "Google Gemini Chat Model",
+      "credentials": {
+        "googlePalmApi": {
+          "id": "YOUR_GEMINI_CREDENTIAL_ID",
+          "name": "Google Gemini(PaLM) Api account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "text": "={{ $json.headers }}{{ $json.body.message }}",
+        "guardrails": {
+          "nsfw": {
+            "value": {
+              "threshold": 0.7
+            }
+          }
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.guardrails",
+      "typeVersion": 2,
+      "position": [
+        -320,
+        -64
+      ],
+      "id": "726a23eb-3fec-4cdf-a93f-4c4b64c5ee67",
+      "name": "Guardrails"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Guardrails",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Regex.js": {
+      "main": [
+        [
+          {
+            "node": "Gemini Email Processs",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "JsonFormatter.js": {
+      "main": [
+        [
+          {
+            "node": "Append row in SucceedDemo",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gemini Email Processs": {
+      "main": [
+        [
+          {
+            "node": "JsonFormatter.js",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Append row in SucceedDemo": {
+      "main": [
+        []
+      ]
+    },
+    "Google Gemini Chat Model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Guardrails",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Guardrails": {
+      "main": [
+        [
+          {
+            "node": "Regex.js",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "timeSavedMode": "fixed",
+    "timezone": "Europe/London",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false
+  },
+  "versionId": "1f3f8051-2243-43c7-83e7-1d5a921d07e7",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "4c145e044dab90ff61f3a52fa3fc92d3d7c674827d82beb016975556aee342ea"
+  },
+  "id": "JGpqOpeAwFNldMkp",
+  "tags": []
+}
